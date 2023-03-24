@@ -1,0 +1,79 @@
+# This example config does not specify resource requests or limits.
+# For examples with more realistic resource configuration, see
+# ray-cluster.complete.large.yaml and
+# ray-cluster.autoscaler.large.yaml.
+apiVersion: ray.io/v1alpha1
+kind: RayCluster
+metadata:
+  labels:
+    controller-tools.k8s.io: "1.0"
+    # An unique identifier for the head node and workers of this cluster.
+  name: raycluster-mini
+spec:
+  rayVersion: '2.3.0' # should match the Ray version in the image of the containers
+  # Ray head pod template
+  headGroupSpec:
+    serviceType: ClusterIP # optional
+    # the following params are used to complete the ray start: ray start --head --block --redis-port=6379 ...
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      num-cpus: '1' # can be auto-completed from the limits
+      block: 'true'
+    #pod template
+    template:
+      spec:
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.3.0
+          resources:
+            limits:
+              cpu: 1
+              memory: 2Gi
+            requests:
+              cpu: 500m
+              memory: 2Gi
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265 # Ray dashboard
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          env:
+          - name: RAY_USE_TLS
+            value: "1"
+          - name: RAY_TLS_SERVER_CERT
+            value: /home/ray/workspace/tls/server.crt
+          - name: RAY_TLS_SERVER_KEY
+            value: /home/ray/workspace/tls/server.key
+          - name: RAY_TLS_CA_CERT
+            value: /home/ray/workspace/ca/ca.crt
+          volumeMounts:
+          - name: ca
+            mountPath: "/home/ray/workspace/ca"
+            readOnly: true
+          - name: server-cert
+            mountPath: "/home/ray/workspace/tls"
+        initContainers:
+        - command:
+          - sh
+          - -c
+          - cd /home/ray/workspace/tls && openssl req -nodes -newkey rsa:2048 -keyout server.key -out server.csr -subj '/CN=ray-head' && printf "authorityKeyIdentifier=keyid,issuer\nbasicConstraints=CA:FALSE\nsubjectAltName = @alt_names\n[alt_names]\nDNS.1 = 127.0.0.1\nDNS.2 = localhost\nDNS.3 = ${RAY_IP}\nDNS.4 = $(awk 'END{print $1}' /etc/hosts)">./domain.ext && openssl x509 -req -CA /home/ray/workspace/ca/ca.crt -CAkey /home/ray/workspace/ca/ca.key -in server.csr -out server.crt -days 365 -CAcreateserial -extfile domain.ext
+          image: docker.io/redhat/ubi9
+          name: create-cert
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+          - name: ca
+            mountPath: "/home/ray/workspace/ca"
+            readOnly: true
+          - name: server-cert
+            mountPath: "/home/ray/workspace/tls"
+        volumes:
+        - name: ca
+          secret:
+            secretName: ca-secret
+          optional: false
+        - name: server-cert
+          emptyDir: {}
